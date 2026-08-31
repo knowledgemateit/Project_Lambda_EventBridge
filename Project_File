@@ -1,0 +1,133 @@
+To implement the EC2 Auto-Reaper, you need to perform three main tasks: 
+set up the permissions (IAM), 
+create the logic (Lambda),
+Schedule the trigger (EventBridge).
+
+Step 1: Create the IAM Policy & Role
+Lambda needs "permission to act." Without this, the code will fail with an Unauthorized error.
+Open IAM Console: Navigate to IAM.
+Create Policy:
+Click Policies > Create policy.
+Select the JSON tab and paste this:
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeInstances",
+                "ec2:StopInstances",
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+Click Next, name it EC2ReaperPolicy, and click Create policy.
+Create Role:
+Click Roles > Create role.
+Select AWS Service and choose Lambda.
+Search for your new EC2ReaperPolicy and check the box.
+Name the role EC2ReaperRole and click Create role.
+
+Step 2: Create the Lambda Function
+Open Lambda Console: Navigate to Lambda.
+Create Function:
+import boto3
+
+def lambda_handler(event, context):
+    ec2 = boto3.client('ec2')
+    
+    # 1. Find all running instances
+    instances = ec2.describe_instances(
+        Filters=[{'Name': 'instance-state-name', 'Values': ['running']}]
+    )
+    
+    # Extract just the Instance IDs into a list
+    instance_ids = []
+    for reservation in instances['Reservations']:
+        for instance in reservation['Instances']:
+            instance_ids.append(instance['InstanceId'])
+
+    # 2. Stop the instances if any are found
+    if instance_ids:
+        print(f"Stopping instances: {instance_ids}")
+        ec2.stop_instances(InstanceIds=instance_ids)
+    else:
+        print("No running instances found.")
+
+    return {
+        "status": "Success",
+        "stopped_count": len(instance_ids)
+    }
+
+Choose Author from scratch.
+
+Name: EC2InstanceReaper.
+
+Runtime: Python 3.12 (or latest).
+
+Permissions: Expand "Change default execution role," select Use an existing role, and pick the EC2ReaperRole you just made.
+
+Click Create function.
+
+Deploy Code:
+
+In the Code tab, delete the default code and paste the Python script from the sre_project_guide.md file.
+
+Click Deploy (crucial—changes won't take effect until you click this).
+
+Adjust Timeout:
+
+Go to Configuration > General configuration > Edit.
+
+Change Timeout to 1 minute. Stopping multiple instances can take longer than the default 3 seconds.
+
+Step 3: Schedule the Trigger (EventBridge)
+Open EventBridge Console: Navigate to EventBridge.
+
+Create Schedule:
+
+Go to Scheduler > Schedules > Create schedule.
+
+Schedule name: Every30MinsReaper.
+
+Occurrence: Recurring schedule.
+
+Schedule type: Rate-based schedule.
+
+Value: 30 Unit: minutes.
+
+Click Next.
+
+Select Target:
+
+Choose Templated targets > AWS Lambda Invoke.
+
+Select your EC2InstanceReaper function.
+
+Click Next through the settings and then Create schedule.
+
+How to Test It
+Manual Test: Inside the Lambda console, click the Test tab. Create a new event (the default JSON is fine) and click Test. Check the "Execution results" to see if it found any instances to stop.
+
+Live Test: Launch a test EC2 instance. Wait 3 hours (or temporarily change limit_hours = 0.01 in the code for a 30-second test) and verify that EventBridge triggers the Lambda and stops the instance.
+
+Update the Role trust relationship:
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": [
+          "lambda.amazonaws.com",
+          "scheduler.amazonaws.com"
+        ]
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
